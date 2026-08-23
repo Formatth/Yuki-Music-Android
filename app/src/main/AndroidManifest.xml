@@ -10,16 +10,22 @@
         android:allowBackup="true"
         android:label="Yuki Music"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
         android:theme="@style/Theme.YukiMusic">
 
         <activity
-            android:name=".FixedMainActivity"
-            android:exported="true">
+            android:name=".WebViewActivity"
+            android:exported="true"
+            android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".FixedMainActivity"
+            android:exported="false" />
 
         <service
             android:name=".player.PlaybackService"
