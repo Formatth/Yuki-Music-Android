@@ -4,9 +4,9 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.graphics.Color
 import android.os.Bundle
-import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -14,18 +14,20 @@ import android.webkit.WebViewClient
 import android.widget.Toast
 
 /**
- * Thin Android shell around the Yuki Music web application.
+ * Android shell around the Yuki Music PWA.
  *
- * The UI stays in Yuki-Music-PWA so web deployments can update the interface
- * without rebuilding the APK. Android owns the app window/lifecycle while the
- * existing web player remains the source of truth for the UI.
+ * The web app remains the source of truth for the UI and YouTube IFrame
+ * playback. Android owns the window/lifecycle while this WebView provides the
+ * browser capabilities required by the PWA.
  */
 class WebViewActivity : Activity() {
     private lateinit var webView: WebView
+    private var mainFrameRetries = 0
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         window.statusBarColor = Color.BLACK
         window.navigationBarColor = Color.BLACK
         window.decorView.systemUiVisibility = 0
@@ -37,14 +39,19 @@ class WebViewActivity : Activity() {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.databaseEnabled = true
-        settings.mediaPlaybackRequiresUserGesture = true
+
+        // IMPORTANT: Yuki Music starts the YouTube IFrame after an async
+        // network/API step. Keeping this true causes Chromium/WebView to reject
+        // playVideo() because the original tap gesture has already ended.
+        settings.mediaPlaybackRequiresUserGesture = false
+
         settings.loadsImagesAutomatically = true
         settings.javaScriptCanOpenWindowsAutomatically = false
         settings.setSupportMultipleWindows(false)
         settings.cacheMode = WebSettings.LOAD_DEFAULT
         settings.allowFileAccess = false
         settings.allowContentAccess = false
-        settings.userAgentString = "YukiMusicAndroid/1.0 ${settings.userAgentString}"
+        settings.userAgentString = "YukiMusicAndroid/1.1 ${settings.userAgentString}"
 
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
@@ -52,6 +59,34 @@ class WebViewActivity : Activity() {
         webView.setBackgroundColor(Color.BLACK)
         webView.webChromeClient = WebChromeClient()
         webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String) {
+                super.onPageFinished(view, url)
+                mainFrameRetries = 0
+            }
+
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest,
+                error: WebResourceError
+            ) {
+                super.onReceivedError(view, request, error)
+                if (request.isForMainFrame) retryMainFrame()
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView,
+                request: WebResourceRequest,
+                errorResponse: android.webkit.WebResourceResponse
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse)
+                // Vercel can occasionally return a transient 404/5xx while a
+                // deployment is warming. Only retry errors for the main page;
+                // never reload because an image/API resource failed.
+                if (request.isForMainFrame && errorResponse.statusCode >= 400) {
+                    retryMainFrame()
+                }
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val host = request.url.host ?: return false
                 return host != "yuki-music-pwa.vercel.app" &&
@@ -66,14 +101,21 @@ class WebViewActivity : Activity() {
         webView.loadUrl(APP_URL)
     }
 
+    private fun retryMainFrame() {
+        if (mainFrameRetries >= MAX_MAIN_FRAME_RETRIES) return
+        mainFrameRetries++
+        webView.postDelayed({
+            if (!isFinishing && !isDestroyed) webView.loadUrl(APP_URL)
+        }, 600L)
+    }
+
     override fun onBackPressed() {
         if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
 
     override fun onPause() {
-        // Do not call WebView.onPause(): doing so would deliberately pause the
-        // web audio pipeline. The native media-session layer can be added later
-        // without changing the web UI.
+        // Do not call WebView.onPause(): that would intentionally pause the
+        // web audio pipeline when the Activity is backgrounded.
         super.onPause()
     }
 
@@ -91,11 +133,14 @@ class WebViewActivity : Activity() {
 
         @android.webkit.JavascriptInterface
         fun showToast(message: String) {
-            activity.runOnUiThread { Toast.makeText(activity, message, Toast.LENGTH_SHORT).show() }
+            activity.runOnUiThread {
+                Toast.makeText(activity, message, Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
     companion object {
         private const val APP_URL = "https://yuki-music-pwa.vercel.app/#home"
+        private const val MAX_MAIN_FRAME_RETRIES = 2
     }
 }
