@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.formatth.yukimusic"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.formatth.yukimusic"
