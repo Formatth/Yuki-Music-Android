@@ -39,19 +39,18 @@ class WebViewActivity : Activity() {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.databaseEnabled = true
-
-        // IMPORTANT: Yuki Music starts the YouTube IFrame after an async
-        // network/API step. Keeping this true causes Chromium/WebView to reject
-        // playVideo() because the original tap gesture has already ended.
         settings.mediaPlaybackRequiresUserGesture = false
-
         settings.loadsImagesAutomatically = true
         settings.javaScriptCanOpenWindowsAutomatically = false
         settings.setSupportMultipleWindows(false)
+        settings.setSupportZoom(false)
+        settings.useWideViewPort = true
+        settings.loadWithOverviewMode = true
         settings.cacheMode = WebSettings.LOAD_DEFAULT
         settings.allowFileAccess = false
         settings.allowContentAccess = false
-        settings.userAgentString = "YukiMusicAndroid/1.1 ${settings.userAgentString}"
+        // Keep Android WebView's normal browser identity. YouTube's embedded
+        // player can behave differently when the UA is modified.
 
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
@@ -79,21 +78,21 @@ class WebViewActivity : Activity() {
                 errorResponse: android.webkit.WebResourceResponse
             ) {
                 super.onReceivedHttpError(view, request, errorResponse)
-                // Vercel can occasionally return a transient 404/5xx while a
-                // deployment is warming. Only retry errors for the main page;
-                // never reload because an image/API resource failed.
                 if (request.isForMainFrame && errorResponse.statusCode >= 400) {
                     retryMainFrame()
                 }
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                // Never interfere with iframe/subresource navigation. YouTube
+                // uses several cross-origin hosts for the embedded player.
+                if (!request.isForMainFrame) return false
                 val host = request.url.host ?: return false
                 return host != "yuki-music-pwa.vercel.app" &&
                     host != "yuki-music-backend.vercel.app" &&
                     host != "www.youtube.com" &&
-                    host != "music.youtube.com" &&
-                    host != "youtube.com"
+                    host != "youtube.com" &&
+                    host != "music.youtube.com"
             }
         }
 
@@ -106,7 +105,7 @@ class WebViewActivity : Activity() {
         mainFrameRetries++
         webView.postDelayed({
             if (!isFinishing && !isDestroyed) webView.loadUrl(APP_URL)
-        }, 600L)
+        }, 350L)
     }
 
     override fun onBackPressed() {
@@ -140,7 +139,9 @@ class WebViewActivity : Activity() {
     }
 
     companion object {
-        private const val APP_URL = "https://yuki-music-pwa.vercel.app/#home"
+        // The web router expects '#/home'. '#home' becomes the invalid route
+        // '#/ome' after the router strips its prefix, causing "Page not found".
+        private const val APP_URL = "https://yuki-music-pwa.vercel.app/#/home"
         private const val MAX_MAIN_FRAME_RETRIES = 2
     }
 }
