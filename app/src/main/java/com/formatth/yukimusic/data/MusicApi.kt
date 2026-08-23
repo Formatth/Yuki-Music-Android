@@ -14,10 +14,28 @@ data class MusicSearchItem(
     val title: String,
     val subtitle: String,
     val videoId: String?,
-    val thumbnail: String?
+    val thumbnail: String?,
+    val type: String = "song"
+)
+
+data class HomeSection(
+    val title: String,
+    val items: List<MusicSearchItem>
 )
 
 object MusicApi {
+    suspend fun getHome(): List<HomeSection> = withContext(Dispatchers.IO) {
+        val connection = openGet("$BASE_URL/api/home")
+        try {
+            if (connection.responseCode !in 200..299) {
+                throw IllegalStateException("Home API returned HTTP ${connection.responseCode}")
+            }
+            parseHome(JSONObject(connection.inputStream.bufferedReader().use { it.readText() }))
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     suspend fun searchSongs(query: String): List<MusicSearchItem> = withContext(Dispatchers.IO) {
         val encoded = URLEncoder.encode(query.trim(), "UTF-8")
         val connection = openGet("$BASE_URL/api/search?q=$encoded&filter=songs")
@@ -76,8 +94,39 @@ object MusicApi {
             connectTimeout = 10_000
             readTimeout = 20_000
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "Yuki-Music-Android/0.2")
+            setRequestProperty("User-Agent", "Yuki-Music-Android/0.4")
         }
+
+    private fun parseHome(root: JSONObject): List<HomeSection> {
+        val sections = root.optJSONArray("sections") ?: return emptyList()
+        val result = mutableListOf<HomeSection>()
+
+        for (i in 0 until sections.length()) {
+            val section = sections.optJSONObject(i) ?: continue
+            val title = section.optString("title").trim()
+            val items = section.optJSONArray("items") ?: continue
+            val parsed = mutableListOf<MusicSearchItem>()
+
+            for (j in 0 until items.length()) {
+                val item = items.optJSONObject(j) ?: continue
+                val itemTitle = item.optString("title").trim()
+                if (itemTitle.isBlank()) continue
+
+                parsed += MusicSearchItem(
+                    title = itemTitle,
+                    subtitle = item.optString("subtitle").trim(),
+                    videoId = item.optString("videoId").takeIf { it.isNotBlank() },
+                    thumbnail = item.optString("thumbnail").takeIf { it.isNotBlank() },
+                    type = item.optString("type").ifBlank { "song" }
+                )
+            }
+
+            if (parsed.isNotEmpty()) {
+                result += HomeSection(title.ifBlank { "Yuki Music" }, parsed)
+            }
+        }
+        return result
+    }
 
     private fun parseSearch(root: JSONObject): List<MusicSearchItem> {
         val result = mutableListOf<MusicSearchItem>()
@@ -96,7 +145,8 @@ object MusicApi {
                     title = title,
                     subtitle = item.optString("subtitle").trim(),
                     videoId = videoId,
-                    thumbnail = item.optString("thumbnail").takeIf { it.isNotBlank() }
+                    thumbnail = item.optString("thumbnail").takeIf { it.isNotBlank() },
+                    type = item.optString("type").ifBlank { "song" }
                 )
             }
         }
