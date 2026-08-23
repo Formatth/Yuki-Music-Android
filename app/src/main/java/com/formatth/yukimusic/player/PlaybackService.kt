@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -13,20 +14,26 @@ import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import com.formatth.yukimusic.R
 import com.formatth.yukimusic.WebViewActivity
 import java.net.URL
 
 /**
- * Keeps the WebView media process important while audio is playing and
- * publishes native Android media controls/notification.
+ * Foreground Android anchor for the current WebView/YouTube playback path.
  *
  * The actual audio remains the official YouTube IFrame player in WebView.
  * This service does not extract or replace YouTube media streams.
+ *
+ * The service stays foreground while playback is active and holds a short
+ * partial CPU wakelock so the WebView audio renderer is not suspended simply
+ * because the screen has turned off. This is a best-effort bridge until audio
+ * is moved to a fully native Media3 player.
  */
 class PlaybackService : Service() {
     private lateinit var mediaSession: MediaSession
     private lateinit var notificationManager: NotificationManager
+    private var wakeLock: PowerManager.WakeLock? = null
     private var title = "Yuki Music"
     private var artist = ""
     private var artworkUrl = ""
@@ -58,6 +65,7 @@ class PlaybackService : Service() {
                 artist = intent.getStringExtra(EXTRA_ARTIST).orEmpty()
                 artworkUrl = intent.getStringExtra(EXTRA_ARTWORK).orEmpty()
                 isPlaying = intent.getBooleanExtra(EXTRA_PLAYING, false)
+                if (isPlaying) acquirePlaybackWakeLock() else releasePlaybackWakeLock()
                 publishPlaybackState()
                 showNotification()
                 loadArtworkAsync(artworkUrl)
@@ -73,6 +81,23 @@ class PlaybackService : Service() {
             }
         }
         return START_STICKY
+    }
+
+    private fun acquirePlaybackWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val manager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = manager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "YukiMusic:Playback").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }
+
+    private fun releasePlaybackWakeLock() {
+        try {
+            wakeLock?.let { if (it.isHeld) it.release() }
+        } catch (_: Exception) {
+        }
+        wakeLock = null
     }
 
     private fun publishPlaybackState(artwork: Bitmap? = null) {
@@ -209,6 +234,7 @@ class PlaybackService : Service() {
     private fun stopPlaybackService() {
         isPlaying = false
         running = false
+        releasePlaybackWakeLock()
         mediaSession.isActive = false
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE)
         else @Suppress("DEPRECATION") stopForeground(true)
@@ -226,11 +252,15 @@ class PlaybackService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Keep the foreground service alive while WebView audio continues.
+        // Do not stop or cancel the foreground service when the user removes
+        // the app task. START_STICKY allows Android to recreate the service if
+        // the process is reclaimed.
+        if (isPlaying) acquirePlaybackWakeLock()
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
+        releasePlaybackWakeLock()
         running = false
         if (::mediaSession.isInitialized) {
             mediaSession.isActive = false
@@ -266,7 +296,7 @@ class PlaybackService : Service() {
         const val CHANNEL_ID = "yuki_music_playback"
         const val NOTIFICATION_ID = 4201
 
-        fun update(context: android.content.Context, title: String, artist: String, artwork: String, playing: Boolean) {
+        fun update(context: Context, title: String, artist: String, artwork: String, playing: Boolean) {
             val intent = Intent(context, PlaybackService::class.java).apply {
                 action = ACTION_UPDATE
                 putExtra(EXTRA_TITLE, title)
@@ -279,7 +309,7 @@ class PlaybackService : Service() {
             else context.startService(intent)
         }
 
-        fun stop(context: android.content.Context) {
+        fun stop(context: Context) {
             if (running) context.startService(Intent(context, PlaybackService::class.java).setAction(ACTION_STOP))
         }
     }
