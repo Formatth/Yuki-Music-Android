@@ -135,7 +135,7 @@ class WebViewActivity : Activity() {
         if (webView.canGoBack()) {
             webView.goBack()
         } else {
-            // Keep the Activity/WebView alive instead of finishing it. This is
+            // Background the task instead of finishing the Activity. This is
             // important for the current YouTube IFrame playback architecture.
             moveTaskToBack(true)
         }
@@ -155,17 +155,9 @@ class WebViewActivity : Activity() {
     override fun onDestroy() {
         try { unregisterReceiver(playbackReceiver) } catch (_: Exception) {}
 
-        // Do not tear down WebView merely because the Activity leaves the
-        // foreground. The service may continue running while the task is
-        // backgrounded. If the Activity is explicitly finishing, stop playback
-        // and release resources normally.
-        if (isFinishing) {
-            PlaybackService.stop(applicationContext)
-            webView.stopLoading()
-            webView.loadUrl("about:blank")
-            webView.removeAllViews()
-            webView.destroy()
-        }
+        // Do not stop the PlaybackService or destroy WebView here. Activity
+        // destruction can happen while the task is removed/recreated, while
+        // the foreground service is explicitly responsible for playback life.
         super.onDestroy()
     }
 
