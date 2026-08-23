@@ -15,6 +15,7 @@ import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -92,7 +93,7 @@ class WebViewActivity : Activity() {
             override fun onReceivedHttpError(
                 view: WebView,
                 request: WebResourceRequest,
-                errorResponse: android.webkit.WebResourceResponse
+                errorResponse: WebResourceResponse
             ) {
                 super.onReceivedHttpError(view, request, errorResponse)
                 if (request.isForMainFrame && errorResponse.statusCode >= 400) retryMainFrame()
@@ -133,16 +134,11 @@ class WebViewActivity : Activity() {
     }
 
     override fun onBackPressed() {
-        if (webView.canGoBack()) {
-            webView.goBack()
-        } else {
-            moveTaskToBack(true)
-        }
+        if (webView.canGoBack()) webView.goBack() else moveTaskToBack(true)
     }
 
     override fun onPause() {
-        // Do not pause the current WebView player. Native Media3 playback does
-        // not depend on this Activity when it is used.
+        // Native Media3 playback does not depend on this Activity.
         super.onPause()
     }
 
@@ -183,18 +179,19 @@ class WebViewActivity : Activity() {
             }
 
             activity.runOnUiThread { activity.requestNotificationPermissionIfNeeded() }
-            val intent = Intent(activity.applicationContext, NativePlaybackService::class.java).apply {
-                action = NativePlaybackService.ACTION_PLAY_URL
+            startNativeService(NativePlaybackService.ACTION_PLAY_URL) {
                 putExtra(NativePlaybackService.EXTRA_URL, safeUrl)
                 putExtra(NativePlaybackService.EXTRA_TITLE, title)
                 putExtra(NativePlaybackService.EXTRA_ARTIST, artist)
                 putExtra(NativePlaybackService.EXTRA_ARTWORK, artwork)
             }
-            if (Build.VERSION.SDK_INT >= 26) {
-                ContextCompat.startForegroundService(activity.applicationContext, intent)
-            } else {
-                activity.applicationContext.startService(intent)
-            }
+        }
+
+        /** Temporary proof-of-concept test using a public MP3 sample. */
+        @android.webkit.JavascriptInterface
+        fun playNativeTest() {
+            activity.runOnUiThread { activity.requestNotificationPermissionIfNeeded() }
+            startNativeService(NativePlaybackService.ACTION_PLAY_TEST) {}
         }
 
         @android.webkit.JavascriptInterface
@@ -213,7 +210,17 @@ class WebViewActivity : Activity() {
         fun nativeStop() = sendNativeCommand(NativePlaybackService.ACTION_STOP)
 
         private fun sendNativeCommand(action: String) {
-            val intent = Intent(activity.applicationContext, NativePlaybackService::class.java).setAction(action)
+            startNativeService(action) {}
+        }
+
+        private fun startNativeService(
+            action: String,
+            extras: Intent.() -> Unit
+        ) {
+            val intent = Intent(activity.applicationContext, NativePlaybackService::class.java)
+                .setAction(action)
+                .apply(extras)
+
             if (Build.VERSION.SDK_INT >= 26) {
                 ContextCompat.startForegroundService(activity.applicationContext, intent)
             } else {
