@@ -62,6 +62,7 @@ import com.formatth.yukimusic.data.MusicApi
 import com.formatth.yukimusic.data.MusicSearchItem
 import com.formatth.yukimusic.player.PlaybackService
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var mediaController: MediaController? = null
@@ -127,7 +128,7 @@ class MainActivity : ComponentActivity() {
         playbackError = null
         loadingVideoId = videoId
 
-        lifecycleScope.launchWhenStarted {
+        lifecycleScope.launch {
             try {
                 val audioUrl = MusicApi.resolvePlaybackUrl(videoId)
                 val controller = mediaController ?: throw IllegalStateException("Player service is not ready")
