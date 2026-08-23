@@ -1,13 +1,14 @@
 package com.formatth.yukimusic.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 
-private const val BASE_URL = "https://richmusic.vercel.app"
+auto private const val BASE_URL = "https://richmusic.vercel.app"
 
 data class MusicSearchItem(
     val title: String,
@@ -19,26 +20,57 @@ data class MusicSearchItem(
 object MusicApi {
     suspend fun searchSongs(query: String): List<MusicSearchItem> = withContext(Dispatchers.IO) {
         val encoded = URLEncoder.encode(query.trim(), "UTF-8")
-        val url = URL("$BASE_URL/api/search?q=$encoded&filter=songs")
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 10_000
-            readTimeout = 15_000
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "Yuki-Music-Android/0.1")
-        }
-
+        val connection = openGet("$BASE_URL/api/search?q=$encoded&filter=songs")
         try {
             if (connection.responseCode !in 200..299) {
                 throw IllegalStateException("API returned HTTP ${connection.responseCode}")
             }
-
-            val body = connection.inputStream.bufferedReader().use { it.readText() }
-            parseSearch(JSONObject(body))
+            parseSearch(connection.inputStream.bufferedReader().use { it.readText() }.let(::JSONObject))
         } finally {
             connection.disconnect()
         }
     }
+
+    suspend fun resolvePlaybackUrl(videoId: String): String = withContext(Dispatchers.IO) {
+        require(videoId.isNotBlank()) { "Missing videoId" }
+
+        val start = openGet("$BASE_URL/api/download-start?videoId=${URLEncoder.encode(videoId, "UTF-8")}")
+        val startJson = try {
+            if (start.responseCode !in 200..299) throw IllegalStateException("Playback start failed: HTTP ${start.responseCode}")
+            JSONObject(start.inputStream.bufferedReader().use { it.readText() })
+        } finally {
+            start.disconnect()
+        }
+
+        val progressUrl = startJson.optString("progressUrl")
+        if (progressUrl.isBlank()) throw IllegalStateException("Playback converter did not return a progress URL")
+
+        repeat(30) {
+            val progress = openGet(progressUrl)
+            val json = try {
+                if (progress.responseCode !in 200..299) throw IllegalStateException("Playback progress failed: HTTP ${progress.responseCode}")
+                JSONObject(progress.inputStream.bufferedReader().use { it.readText() })
+            } finally {
+                progress.disconnect()
+            }
+
+            if (json.optBoolean("done") && json.optString("url").isNotBlank()) {
+                return@withContext json.optString("url")
+            }
+            delay(1000)
+        }
+
+        throw IllegalStateException("Playback conversion timed out")
+    }
+
+    private fun openGet(rawUrl: String): HttpURLConnection =
+        (URL(rawUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 10_000
+            readTimeout = 20_000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "Yuki-Music-Android/0.2")
+        }
 
     private fun parseSearch(root: JSONObject): List<MusicSearchItem> {
         val result = mutableListOf<MusicSearchItem>()
@@ -61,7 +93,6 @@ object MusicApi {
                 )
             }
         }
-
         return result.distinctBy { it.videoId ?: it.title }
     }
 }
