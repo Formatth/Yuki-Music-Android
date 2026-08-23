@@ -26,9 +26,8 @@ import com.formatth.yukimusic.player.PlaybackService
  * Android shell around the Yuki Music PWA.
  *
  * The web app remains the source of truth for UI and YouTube IFrame playback.
- * Android adds a foreground media service so the WebView process remains
- * important while the user listens in the background, plus native media
- * controls that forward to the WebView player.
+ * Android adds a foreground media service so the WebView remains eligible for
+ * background playback and provides native media controls.
  */
 class WebViewActivity : Activity() {
     private lateinit var webView: WebView
@@ -39,7 +38,7 @@ class WebViewActivity : Activity() {
         override fun onReceive(context: Context, intent: Intent) {
             val command = intent.getStringExtra(PlaybackService.EXTRA_COMMAND) ?: return
             val js = "window.__yukiAndroidControl && window.__yukiAndroidControl(${org.json.JSONObject.quote(command)})"
-            webView.post { webView.evaluateJavascript(js, null) }
+            if (::webView.isInitialized) webView.post { webView.evaluateJavascript(js, null) }
         }
     }
 
@@ -133,21 +132,40 @@ class WebViewActivity : Activity() {
     }
 
     override fun onBackPressed() {
-        if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
+        if (webView.canGoBack()) {
+            webView.goBack()
+        } else {
+            // Keep the Activity/WebView alive instead of finishing it. This is
+            // important for the current YouTube IFrame playback architecture.
+            moveTaskToBack(true)
+        }
     }
 
     override fun onPause() {
-        // Do not call WebView.onPause(): that would intentionally pause the
-        // YouTube WebView audio pipeline when the Activity is backgrounded.
+        // Never call WebView.onPause(): it intentionally pauses the YouTube
+        // media pipeline when the Activity is backgrounded.
         super.onPause()
+    }
+
+    override fun onStop() {
+        // Keep the WebView alive while the foreground media service is active.
+        super.onStop()
     }
 
     override fun onDestroy() {
         try { unregisterReceiver(playbackReceiver) } catch (_: Exception) {}
-        webView.stopLoading()
-        webView.loadUrl("about:blank")
-        webView.removeAllViews()
-        webView.destroy()
+
+        // Do not tear down WebView merely because the Activity leaves the
+        // foreground. The service may continue running while the task is
+        // backgrounded. If the Activity is explicitly finishing, stop playback
+        // and release resources normally.
+        if (isFinishing) {
+            PlaybackService.stop(applicationContext)
+            webView.stopLoading()
+            webView.loadUrl("about:blank")
+            webView.removeAllViews()
+            webView.destroy()
+        }
         super.onDestroy()
     }
 
