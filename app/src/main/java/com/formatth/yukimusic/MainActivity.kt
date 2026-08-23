@@ -20,7 +20,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -52,15 +54,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import coil.compose.AsyncImage
+import com.formatth.yukimusic.data.HomeSection
 import com.formatth.yukimusic.data.MusicApi
 import com.formatth.yukimusic.data.MusicSearchItem
 import com.formatth.yukimusic.player.PlaybackService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -132,7 +138,6 @@ class MainActivity : ComponentActivity() {
             try {
                 val audioUrl = MusicApi.resolvePlaybackUrl(videoId)
                 val controller = mediaController ?: throw IllegalStateException("Player service is not ready")
-
                 val mediaItem = MediaItem.Builder()
                     .setUri(audioUrl)
                     .setMediaId(videoId)
@@ -151,6 +156,7 @@ class MainActivity : ComponentActivity() {
                 currentTitle = item.title
                 isPlaying = true
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 playbackError = e.message ?: "Unable to start playback"
                 isPlaying = false
             } finally {
@@ -197,6 +203,23 @@ private fun YukiMusicApp(
     var results by remember { mutableStateOf<List<MusicSearchItem>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var homeSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
+    var homeLoading by remember { mutableStateOf(false) }
+    var homeError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(selectedTab) {
+        if (selectedTab != 0 || homeSections.isNotEmpty() || homeLoading) return@LaunchedEffect
+        homeLoading = true
+        homeError = null
+        try {
+            homeSections = MusicApi.getHome()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            homeError = e.message ?: "Home failed"
+        } finally {
+            homeLoading = false
+        }
+    }
 
     LaunchedEffect(query, selectedTab) {
         if (selectedTab != 1 || query.trim().length < 2) {
@@ -205,12 +228,14 @@ private fun YukiMusicApp(
             error = null
             return@LaunchedEffect
         }
+
         delay(350)
         loading = true
         error = null
         try {
             results = MusicApi.searchSongs(query)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             results = emptyList()
             error = e.message ?: "Search failed"
         } finally {
@@ -242,7 +267,7 @@ private fun YukiMusicApp(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 20.dp, vertical = 16.dp)
+                .padding(horizontal = 16.dp, vertical = 14.dp)
         ) {
             Text("Yuki Music", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Text(
@@ -254,16 +279,90 @@ private fun YukiMusicApp(
                 color = Color.LightGray,
                 style = MaterialTheme.typography.bodyMedium
             )
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(14.dp))
 
-            if (selectedTab == 1) {
+            if (selectedTab == 0) {
+                HomeScreen(homeSections, homeLoading, homeError, onPlayTrack)
+            } else if (selectedTab == 1) {
                 SearchScreen(query, { query = it }, results, loading, error, loadingVideoId, onPlayTrack)
             } else {
-                HomeScreen(isPlaying, currentTitle, playbackError, onPlayPause)
+                LibraryPlaceholder()
             }
 
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(10.dp))
             MiniPlayer(currentTitle, isPlaying, onPlayPause)
+        }
+    }
+}
+
+@Composable
+private fun HomeScreen(
+    sections: List<HomeSection>,
+    loading: Boolean,
+    error: String?,
+    onPlayTrack: (MusicSearchItem) -> Unit
+) {
+    when {
+        loading -> Box(Modifier.fillMaxWidth().height(520.dp), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        error != null -> Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Text("Couldn't load Home", color = MaterialTheme.colorScheme.error)
+            Spacer(Modifier.height(6.dp))
+            Text(error, color = Color.Gray)
+        }
+        sections.isEmpty() -> Text("No Home content available.", color = Color.Gray, modifier = Modifier.padding(12.dp))
+        else -> LazyColumn(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            items(sections) { section ->
+                Column {
+                    Text(section.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(10.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(section.items) { item ->
+                            HomeMusicCard(item, onPlayTrack)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeMusicCard(item: MusicSearchItem, onPlayTrack: (MusicSearchItem) -> Unit) {
+    Column(modifier = Modifier.width(148.dp)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(148.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFF19191C))
+        ) {
+            AsyncImage(
+                model = item.thumbnail,
+                contentDescription = item.title,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+            if (item.videoId != null) {
+                Surface(
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
+                    shape = RoundedCornerShape(50),
+                    color = Color(0xDDFFFFFF)
+                ) {
+                    IconButton(onClick = { onPlayTrack(item) }) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "Play ${item.title}", tint = Color.Black)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(7.dp))
+        Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 2)
+        if (item.subtitle.isNotBlank()) {
+            Text(item.subtitle, color = Color.Gray, style = MaterialTheme.typography.bodySmall, maxLines = 1)
         }
     }
 }
@@ -297,7 +396,7 @@ private fun SearchScreen(
         query.trim().length < 2 -> Text("Type at least 2 characters to search.", color = Color.Gray, modifier = Modifier.padding(12.dp))
         results.isEmpty() -> Text("No results found.", color = Color.Gray, modifier = Modifier.padding(12.dp))
         else -> LazyColumn(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().weight(1f),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(results) { item -> SearchResultCard(item, loadingVideoId, onPlayTrack) }
@@ -317,11 +416,18 @@ private fun SearchResultCard(
         color = Color(0xFF171719)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            AsyncImage(
+                model = item.thumbnail,
+                contentDescription = item.title,
+                modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop
+            )
+            Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(item.title, fontWeight = FontWeight.SemiBold)
+                Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 2)
                 if (item.subtitle.isNotBlank()) {
                     Spacer(Modifier.height(3.dp))
                     Text(item.subtitle, color = Color.Gray, style = MaterialTheme.typography.bodySmall, maxLines = 2)
@@ -341,67 +447,18 @@ private fun SearchResultCard(
 }
 
 @Composable
-private fun HomeScreen(
-    isPlaying: Boolean,
-    currentTitle: String?,
-    playbackError: String?,
-    onPlayPause: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(210.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color(0xFF18181B)),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = null,
-                modifier = Modifier.height(52.dp),
-                tint = Color.White
-            )
-            Spacer(Modifier.height(10.dp))
-            Text(currentTitle ?: "Nothing playing", fontWeight = FontWeight.SemiBold, maxLines = 1)
-            Text(
-                if (isPlaying) "Playing in background" else "Search a song to start playback",
-                color = Color.Gray
-            )
-            if (playbackError != null) {
-                Spacer(Modifier.height(8.dp))
-                Text(playbackError, color = MaterialTheme.colorScheme.error, maxLines = 2)
-            }
-            if (currentTitle != null) {
-                Spacer(Modifier.height(10.dp))
-                Button(onClick = onPlayPause) { Text(if (isPlaying) "Pause" else "Resume") }
-            }
-        }
-    }
-    Spacer(Modifier.height(20.dp))
-    Text("Quick access", style = MaterialTheme.typography.titleMedium)
-    Spacer(Modifier.height(10.dp))
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        QuickCard("Favorites", Icons.Default.FavoriteBorder, Modifier.weight(1f))
-        QuickCard("Library", Icons.Default.LibraryMusic, Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun QuickCard(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier) {
-    Surface(modifier = modifier, shape = RoundedCornerShape(18.dp), color = Color(0xFF171719)) {
-        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null)
-            Spacer(Modifier.padding(4.dp))
-            Text(title, fontWeight = FontWeight.Medium)
-        }
+private fun LibraryPlaceholder() {
+    Column(Modifier.fillMaxWidth().weight(1f).padding(12.dp)) {
+        Text("Your library", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text("Favorites, playlists and history are coming next.", color = Color.Gray)
     }
 }
 
 @Composable
 private fun MiniPlayer(currentTitle: String?, isPlaying: Boolean, onPlayPause: () -> Unit) {
     Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), color = Color(0xFF19191C)) {
-        Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(currentTitle ?: "No track selected", fontWeight = FontWeight.SemiBold, maxLines = 1)
                 Text("Yuki Music • background player", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
