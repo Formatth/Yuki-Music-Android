@@ -1,12 +1,15 @@
 package com.formatth.yukimusic
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -30,6 +33,7 @@ import com.formatth.yukimusic.player.PlaybackService
 class WebViewActivity : Activity() {
     private lateinit var webView: WebView
     private var mainFrameRetries = 0
+    private var notificationPermissionRequested = false
 
     private val playbackReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -113,6 +117,13 @@ class WebViewActivity : Activity() {
         webView.loadUrl(APP_URL)
     }
 
+    private fun requestNotificationPermissionIfNeeded() {
+        if (notificationPermissionRequested || Build.VERSION.SDK_INT < 33) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        notificationPermissionRequested = true
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
+    }
+
     private fun retryMainFrame() {
         if (mainFrameRetries >= MAX_MAIN_FRAME_RETRIES) return
         mainFrameRetries++
@@ -140,7 +151,7 @@ class WebViewActivity : Activity() {
         super.onDestroy()
     }
 
-    class AndroidBridge(private val activity: Activity) {
+    class AndroidBridge(private val activity: WebViewActivity) {
         @android.webkit.JavascriptInterface
         fun getPlatform(): String = "android-webview"
 
@@ -153,6 +164,7 @@ class WebViewActivity : Activity() {
 
         @android.webkit.JavascriptInterface
         fun updatePlayback(title: String, artist: String, artwork: String, playing: Boolean) {
+            activity.runOnUiThread { activity.requestNotificationPermissionIfNeeded() }
             PlaybackService.update(activity.applicationContext, title, artist, artwork, playing)
         }
 
@@ -165,5 +177,6 @@ class WebViewActivity : Activity() {
     companion object {
         private const val APP_URL = "https://yuki-music-pwa.vercel.app/#/home"
         private const val MAX_MAIN_FRAME_RETRIES = 2
+        private const val NOTIFICATION_PERMISSION_REQUEST = 9001
     }
 }
