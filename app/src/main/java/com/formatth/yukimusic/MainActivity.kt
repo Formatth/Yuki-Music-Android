@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -31,7 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,15 +40,79 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.media3.common.MediaItem
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.formatth.yukimusic.player.PlaybackService
 
 class MainActivity : ComponentActivity() {
+    private var mediaController: MediaController? = null
+    private var controllerFuture: com.google.common.util.concurrent.ListenableFuture<MediaController>? = null
+    private var isPlaying by mutableStateOf(false)
+
+    private val demoMediaItem = MediaItem.Builder()
+        .setUri("https://storage.googleapis.com/exoplayer-test-media-0/play.mp3")
+        .setMediaId("yuki-demo")
+        .setMediaMetadata(
+            androidx.media3.common.MediaMetadata.Builder()
+                .setTitle("Yuki Music Demo")
+                .setArtist("Yuki Music")
+                .build()
+        )
+        .build()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             YukiMusicTheme {
-                YukiMusicApp()
+                YukiMusicApp(
+                    isPlaying = isPlaying,
+                    onPlayPause = ::toggleDemoPlayback
+                )
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        val sessionToken = SessionToken(this, android.content.ComponentName(this, PlaybackService::class.java))
+        controllerFuture = MediaController.Builder(this, sessionToken).buildAsync().also { future ->
+            future.addListener(
+                {
+                    try {
+                        mediaController = future.get()
+                        isPlaying = mediaController?.isPlaying == true
+                    } catch (_: Exception) {
+                        mediaController = null
+                    }
+                },
+                ContextCompat.getMainExecutor(this)
+            )
+        }
+    }
+
+    override fun onStop() {
+        mediaController?.release()
+        mediaController = null
+        controllerFuture = null
+        super.onStop()
+    }
+
+    private fun toggleDemoPlayback() {
+        val controller = mediaController ?: return
+        if (controller.isPlaying) {
+            controller.pause()
+            isPlaying = false
+            return
+        }
+
+        if (controller.currentMediaItem == null) {
+            controller.setMediaItem(demoMediaItem)
+            controller.prepare()
+        }
+        controller.play()
+        isPlaying = true
     }
 }
 
@@ -64,8 +129,11 @@ private fun YukiMusicTheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun YukiMusicApp() {
-    var selectedTab by remember { mutableIntStateOf(0) }
+private fun YukiMusicApp(
+    isPlaying: Boolean,
+    onPlayPause: () -> Unit
+) {
+    var selectedTab by mutableIntStateOf(0)
 
     Scaffold(
         containerColor = Color(0xFF0B0B0D),
@@ -120,19 +188,24 @@ private fun YukiMusicApp() {
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
-                        imageVector = Icons.Default.PlayArrow,
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = null,
                         modifier = Modifier.height(52.dp),
                         tint = Color.White
                     )
                     Spacer(Modifier.height(10.dp))
-                    Text("Nothing playing", fontWeight = FontWeight.SemiBold)
-                    Text("Your player is ready", color = Color.Gray)
+                    Text(
+                        if (isPlaying) "Yuki Music Demo" else "Nothing playing",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        if (isPlaying) "Background player active" else "Tap play to test the player",
+                        color = Color.Gray
+                    )
                 }
             }
 
             Spacer(Modifier.height(20.dp))
-
             Text("Quick access", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(10.dp))
 
@@ -145,13 +218,17 @@ private fun YukiMusicApp() {
             }
 
             Spacer(Modifier.weight(1f))
-            MiniPlayer()
+            MiniPlayer(isPlaying = isPlaying, onPlayPause = onPlayPause)
         }
     }
 }
 
 @Composable
-private fun QuickCard(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier) {
+private fun QuickCard(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    modifier: Modifier
+) {
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(18.dp),
@@ -169,7 +246,7 @@ private fun QuickCard(title: String, icon: androidx.compose.ui.graphics.vector.I
 }
 
 @Composable
-private fun MiniPlayer() {
+private fun MiniPlayer(isPlaying: Boolean, onPlayPause: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
@@ -180,11 +257,17 @@ private fun MiniPlayer() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("No track selected", fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (isPlaying) "Yuki Music Demo" else "No track selected",
+                    fontWeight = FontWeight.SemiBold
+                )
                 Text("Yuki Music", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
             }
-            IconButton(onClick = {}) {
-                Icon(Icons.Default.PlayArrow, contentDescription = "Play")
+            IconButton(onClick = onPlayPause) {
+                Icon(
+                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause" else "Play"
+                )
             }
         }
     }
