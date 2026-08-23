@@ -23,10 +23,6 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".FixedMainActivity"
-            android:exported="false" />
-
         <service
             android:name=".player.PlaybackService"
             android:exported="true"
