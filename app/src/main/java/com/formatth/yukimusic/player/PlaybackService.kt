@@ -11,7 +11,6 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
-import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import com.formatth.yukimusic.R
@@ -36,6 +35,7 @@ class PlaybackService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        running = true
         notificationManager = getSystemService(NotificationManager::class.java)
         createChannel()
 
@@ -75,7 +75,7 @@ class PlaybackService : Service() {
         return START_STICKY
     }
 
-    private fun publishPlaybackState() {
+    private fun publishPlaybackState(artwork: Bitmap? = null) {
         val actions = PlaybackState.ACTION_PLAY or
             PlaybackState.ACTION_PAUSE or
             PlaybackState.ACTION_PLAY_PAUSE or
@@ -91,41 +91,26 @@ class PlaybackService : Service() {
                 .build()
         )
 
-        mediaSession.setMetadata(
-            MediaMetadata.Builder()
-                .putString(MediaMetadata.METADATA_KEY_TITLE, title)
-                .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
-                .putString(MediaMetadata.METADATA_KEY_ALBUM, "Yuki Music")
-                .build()
-        )
+        val metadata = MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
+            .putString(MediaMetadata.METADATA_KEY_ALBUM, "Yuki Music")
+        if (artwork != null) metadata.putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
+        mediaSession.setMetadata(metadata.build())
     }
 
     private fun showNotification(artwork: Bitmap? = null) {
         val openIntent = PendingIntent.getActivity(
-            this,
-            100,
+            this, 100,
             Intent(this, WebViewActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-
-        val playPause = PendingIntent.getService(
-            this, 101, Intent(this, PlaybackService::class.java).setAction(ACTION_PLAY_PAUSE),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val prev = PendingIntent.getService(
-            this, 102, Intent(this, PlaybackService::class.java).setAction(ACTION_PREV),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val next = PendingIntent.getService(
-            this, 103, Intent(this, PlaybackService::class.java).setAction(ACTION_NEXT),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val stop = PendingIntent.getService(
-            this, 104, Intent(this, PlaybackService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val playPause = servicePending(101, ACTION_PLAY_PAUSE)
+        val prev = servicePending(102, ACTION_PREV)
+        val next = servicePending(103, ACTION_NEXT)
+        val stop = servicePending(104, ACTION_STOP)
 
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_music)
@@ -142,26 +127,17 @@ class PlaybackService : Service() {
                     .setMediaSession(mediaSession.sessionToken)
                     .setShowActionsInCompactView(1, 2, 3)
             )
-            .addAction(Notification.Action.Builder(
-                android.R.drawable.ic_media_previous, "Previous", prev
-            ).build())
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_media_previous, "Previous", prev).build())
             .addAction(Notification.Action.Builder(
                 if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
                 if (isPlaying) "Pause" else "Play",
                 playPause
             ).build())
-            .addAction(Notification.Action.Builder(
-                android.R.drawable.ic_media_next, "Next", next
-            ).build())
-            .addAction(Notification.Action.Builder(
-                android.R.drawable.ic_menu_close_clear_cancel, "Stop", stop
-            ).build())
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_media_next, "Next", next).build())
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stop).build())
 
         if (artwork != null) builder.setLargeIcon(artwork)
-
-        if (Build.VERSION.SDK_INT >= 31) {
-            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
-        }
+        if (Build.VERSION.SDK_INT >= 31) builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
 
         val notification = builder.build()
         if (!foregroundStarted) {
@@ -178,6 +154,7 @@ class PlaybackService : Service() {
             try {
                 val bitmap = URL(url).openStream().use { BitmapFactory.decodeStream(it) }
                 if (bitmap != null && artworkUrl == url) {
+                    publishPlaybackState(bitmap)
                     notificationManager.notify(NOTIFICATION_ID, buildNotification(bitmap))
                 }
             } catch (_: Exception) {
@@ -187,12 +164,6 @@ class PlaybackService : Service() {
     }
 
     private fun buildNotification(artwork: Bitmap): Notification {
-        // Rebuild through the same notification path, but without another
-        // artwork download. Keeping this separate avoids blocking the service.
-        return buildNotificationInternal(artwork)
-    }
-
-    private fun buildNotificationInternal(artwork: Bitmap): Notification {
         val openIntent = PendingIntent.getActivity(
             this, 100,
             Intent(this, WebViewActivity::class.java).apply {
@@ -232,13 +203,12 @@ class PlaybackService : Service() {
         )
 
     private fun sendControl(command: String) {
-        sendBroadcast(
-            Intent(ACTION_CONTROL).setPackage(packageName).putExtra(EXTRA_COMMAND, command)
-        )
+        sendBroadcast(Intent(ACTION_CONTROL).setPackage(packageName).putExtra(EXTRA_COMMAND, command))
     }
 
     private fun stopPlaybackService() {
         isPlaying = false
+        running = false
         mediaSession.isActive = false
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE)
         else @Suppress("DEPRECATION") stopForeground(true)
@@ -247,11 +217,7 @@ class PlaybackService : Service() {
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Music playback",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
+            val channel = NotificationChannel(CHANNEL_ID, "Music playback", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "Yuki Music playback controls"
                 setShowBadge(false)
             }
@@ -265,6 +231,7 @@ class PlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        running = false
         if (::mediaSession.isInitialized) {
             mediaSession.isActive = false
             mediaSession.release()
@@ -275,6 +242,9 @@ class PlaybackService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+        @Volatile var running = false
+            private set
+
         const val ACTION_UPDATE = "com.formatth.yukimusic.PLAYBACK_UPDATE"
         const val ACTION_PLAY_PAUSE = "com.formatth.yukimusic.PLAY_PAUSE"
         const val ACTION_PLAY = "com.formatth.yukimusic.PLAY"
@@ -304,11 +274,13 @@ class PlaybackService : Service() {
                 putExtra(EXTRA_ARTWORK, artwork)
                 putExtra(EXTRA_PLAYING, playing)
             }
-            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+            if (running) context.startService(intent)
+            else if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent)
+            else context.startService(intent)
         }
 
         fun stop(context: android.content.Context) {
-            context.startService(Intent(context, PlaybackService::class.java).setAction(ACTION_STOP))
+            if (running) context.startService(Intent(context, PlaybackService::class.java).setAction(ACTION_STOP))
         }
     }
 }
