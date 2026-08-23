@@ -8,6 +8,8 @@
 
     <application
         android:allowBackup="true"
+        android:icon="@drawable/ic_yuki_music"
+        android:roundIcon="@drawable/ic_yuki_music"
         android:label="Yuki Music"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
@@ -25,12 +27,8 @@
 
         <service
             android:name=".player.PlaybackService"
-            android:exported="true"
-            android:foregroundServiceType="mediaPlayback">
-            <intent-filter>
-                <action android:name="androidx.media3.session.MediaSessionService" />
-            </intent-filter>
-        </service>
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
     </application>
 </manifest>
