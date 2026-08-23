@@ -8,7 +8,7 @@ import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 
-auto private const val BASE_URL = "https://richmusic.vercel.app"
+private const val BASE_URL = "https://richmusic.vercel.app"
 
 data class MusicSearchItem(
     val title: String,
@@ -25,7 +25,7 @@ object MusicApi {
             if (connection.responseCode !in 200..299) {
                 throw IllegalStateException("API returned HTTP ${connection.responseCode}")
             }
-            parseSearch(connection.inputStream.bufferedReader().use { it.readText() }.let(::JSONObject))
+            parseSearch(JSONObject(connection.inputStream.bufferedReader().use { it.readText() }))
         } finally {
             connection.disconnect()
         }
@@ -36,26 +36,33 @@ object MusicApi {
 
         val start = openGet("$BASE_URL/api/download-start?videoId=${URLEncoder.encode(videoId, "UTF-8")}")
         val startJson = try {
-            if (start.responseCode !in 200..299) throw IllegalStateException("Playback start failed: HTTP ${start.responseCode}")
+            if (start.responseCode !in 200..299) {
+                throw IllegalStateException("Playback start failed: HTTP ${start.responseCode}")
+            }
             JSONObject(start.inputStream.bufferedReader().use { it.readText() })
         } finally {
             start.disconnect()
         }
 
         val progressUrl = startJson.optString("progressUrl")
-        if (progressUrl.isBlank()) throw IllegalStateException("Playback converter did not return a progress URL")
+        if (progressUrl.isBlank()) {
+            throw IllegalStateException("Playback converter did not return a progress URL")
+        }
 
         repeat(30) {
             val progress = openGet(progressUrl)
             val json = try {
-                if (progress.responseCode !in 200..299) throw IllegalStateException("Playback progress failed: HTTP ${progress.responseCode}")
+                if (progress.responseCode !in 200..299) {
+                    throw IllegalStateException("Playback progress failed: HTTP ${progress.responseCode}")
+                }
                 JSONObject(progress.inputStream.bufferedReader().use { it.readText() })
             } finally {
                 progress.disconnect()
             }
 
-            if (json.optBoolean("done") && json.optString("url").isNotBlank()) {
-                return@withContext json.optString("url")
+            val url = json.optString("url")
+            if (json.optBoolean("done") && url.isNotBlank()) {
+                return@withContext url
             }
             delay(1000)
         }
