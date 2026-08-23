@@ -20,14 +20,15 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import com.formatth.yukimusic.player.NativePlaybackService
 import com.formatth.yukimusic.player.PlaybackService
 
 /**
  * Android shell around the Yuki Music PWA.
  *
- * The web app remains the source of truth for UI and YouTube IFrame playback.
- * Android adds a foreground media service so the WebView remains eligible for
- * background playback and provides native media controls.
+ * The web app remains the source of truth for UI. Native Media3 playback is
+ * available through the bridge for a playable/authorized media URL and is
+ * independent from the Activity/WebView lifecycle.
  */
 class WebViewActivity : Activity() {
     private lateinit var webView: WebView
@@ -135,29 +136,22 @@ class WebViewActivity : Activity() {
         if (webView.canGoBack()) {
             webView.goBack()
         } else {
-            // Background the task instead of finishing the Activity. This is
-            // important for the current YouTube IFrame playback architecture.
             moveTaskToBack(true)
         }
     }
 
     override fun onPause() {
-        // Never call WebView.onPause(): it intentionally pauses the YouTube
-        // media pipeline when the Activity is backgrounded.
+        // Do not pause the current WebView player. Native Media3 playback does
+        // not depend on this Activity when it is used.
         super.onPause()
     }
 
     override fun onStop() {
-        // Keep the WebView alive while the foreground media service is active.
         super.onStop()
     }
 
     override fun onDestroy() {
         try { unregisterReceiver(playbackReceiver) } catch (_: Exception) {}
-
-        // Do not stop the PlaybackService or destroy WebView here. Activity
-        // destruction can happen while the task is removed/recreated, while
-        // the foreground service is explicitly responsible for playback life.
         super.onDestroy()
     }
 
@@ -176,6 +170,55 @@ class WebViewActivity : Activity() {
         fun updatePlayback(title: String, artist: String, artwork: String, playing: Boolean) {
             activity.runOnUiThread { activity.requestNotificationPermissionIfNeeded() }
             PlaybackService.update(activity.applicationContext, title, artist, artwork, playing)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun playNativeMedia(url: String, title: String, artist: String, artwork: String) {
+            val safeUrl = url.trim()
+            if (safeUrl.isBlank() || !safeUrl.startsWith("https://")) {
+                activity.runOnUiThread {
+                    Toast.makeText(activity, "Native player needs a playable HTTPS media URL", Toast.LENGTH_SHORT).show()
+                }
+                return
+            }
+
+            activity.runOnUiThread { activity.requestNotificationPermissionIfNeeded() }
+            val intent = Intent(activity.applicationContext, NativePlaybackService::class.java).apply {
+                action = NativePlaybackService.ACTION_PLAY_URL
+                putExtra(NativePlaybackService.EXTRA_URL, safeUrl)
+                putExtra(NativePlaybackService.EXTRA_TITLE, title)
+                putExtra(NativePlaybackService.EXTRA_ARTIST, artist)
+                putExtra(NativePlaybackService.EXTRA_ARTWORK, artwork)
+            }
+            if (Build.VERSION.SDK_INT >= 26) {
+                ContextCompat.startForegroundService(activity.applicationContext, intent)
+            } else {
+                activity.applicationContext.startService(intent)
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun nativePause() = sendNativeCommand(NativePlaybackService.ACTION_PAUSE)
+
+        @android.webkit.JavascriptInterface
+        fun nativePlay() = sendNativeCommand(NativePlaybackService.ACTION_PLAY)
+
+        @android.webkit.JavascriptInterface
+        fun nativeNext() = sendNativeCommand(NativePlaybackService.ACTION_NEXT)
+
+        @android.webkit.JavascriptInterface
+        fun nativePrevious() = sendNativeCommand(NativePlaybackService.ACTION_PREVIOUS)
+
+        @android.webkit.JavascriptInterface
+        fun nativeStop() = sendNativeCommand(NativePlaybackService.ACTION_STOP)
+
+        private fun sendNativeCommand(action: String) {
+            val intent = Intent(activity.applicationContext, NativePlaybackService::class.java).setAction(action)
+            if (Build.VERSION.SDK_INT >= 26) {
+                ContextCompat.startForegroundService(activity.applicationContext, intent)
+            } else {
+                activity.applicationContext.startService(intent)
+            }
         }
 
         @android.webkit.JavascriptInterface
