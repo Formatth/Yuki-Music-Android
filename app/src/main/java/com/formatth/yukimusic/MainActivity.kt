@@ -2,7 +2,9 @@ package com.formatth.yukimusic
 
 import android.Manifest
 import android.content.ComponentName
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -19,6 +21,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -27,15 +31,19 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -51,7 +59,10 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.formatth.yukimusic.data.MusicApi
+import com.formatth.yukimusic.data.MusicSearchItem
 import com.formatth.yukimusic.player.PlaybackService
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     private var mediaController: MediaController? = null
@@ -75,18 +86,15 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                1001
-            )
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
         }
 
         setContent {
             YukiMusicTheme {
                 YukiMusicApp(
                     isPlaying = isPlaying,
-                    onPlayPause = ::toggleDemoPlayback
+                    onPlayPause = ::toggleDemoPlayback,
+                    onOpenVideo = ::openYouTube
                 )
             }
         }
@@ -124,13 +132,16 @@ class MainActivity : ComponentActivity() {
             isPlaying = false
             return
         }
-
         if (controller.currentMediaItem == null) {
             controller.setMediaItem(demoMediaItem)
             controller.prepare()
         }
         controller.play()
         isPlaying = true
+    }
+
+    private fun openYouTube(videoId: String) {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$videoId")))
     }
 }
 
@@ -149,9 +160,34 @@ private fun YukiMusicTheme(content: @Composable () -> Unit) {
 @Composable
 private fun YukiMusicApp(
     isPlaying: Boolean,
-    onPlayPause: () -> Unit
+    onPlayPause: () -> Unit,
+    onOpenVideo: (String) -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
+    var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<List<MusicSearchItem>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(query, selectedTab) {
+        if (selectedTab != 1 || query.trim().length < 2) {
+            results = emptyList()
+            loading = false
+            error = null
+            return@LaunchedEffect
+        }
+        delay(350)
+        loading = true
+        error = null
+        try {
+            results = MusicApi.searchSongs(query)
+        } catch (e: Exception) {
+            results = emptyList()
+            error = e.message ?: "Search failed"
+        } finally {
+            loading = false
+        }
+    }
 
     Scaffold(
         containerColor = Color(0xFF0B0B0D),
@@ -179,83 +215,124 @@ private fun YukiMusicApp(
                 .padding(padding)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
         ) {
+            Text("Yuki Music", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Text(
-                text = "Yuki Music",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = when (selectedTab) {
-                    1 -> "Search music"
+                when (selectedTab) {
+                    1 -> "Search YouTube Music"
                     2 -> "Your library"
                     else -> "Listen to what you love"
                 },
                 color = Color.LightGray,
                 style = MaterialTheme.typography.bodyMedium
             )
+            Spacer(Modifier.height(18.dp))
 
-            Spacer(Modifier.height(24.dp))
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(210.dp)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(Color(0xFF18181B)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.height(52.dp),
-                        tint = Color.White
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        if (isPlaying) "Yuki Music Demo" else "Nothing playing",
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        if (isPlaying) "Background player active" else "Tap play to test the player",
-                        color = Color.Gray
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(20.dp))
-            Text("Quick access", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(10.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                QuickCard("Favorites", Icons.Default.FavoriteBorder, Modifier.weight(1f))
-                QuickCard("Library", Icons.Default.LibraryMusic, Modifier.weight(1f))
+            if (selectedTab == 1) {
+                SearchScreen(query, { query = it }, results, loading, error, onOpenVideo)
+            } else {
+                HomeScreen(isPlaying, onPlayPause)
             }
 
             Spacer(Modifier.weight(1f))
-            MiniPlayer(isPlaying = isPlaying, onPlayPause = onPlayPause)
+            MiniPlayer(isPlaying, onPlayPause)
         }
     }
 }
 
 @Composable
-private fun QuickCard(
-    title: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    modifier: Modifier
+private fun SearchScreen(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    results: List<MusicSearchItem>,
+    loading: Boolean,
+    error: String?,
+    onOpenVideo: (String) -> Unit
 ) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+        placeholder = { Text("Search songs, artists, albums...") },
+        shape = RoundedCornerShape(16.dp)
+    )
+    Spacer(Modifier.height(14.dp))
+
+    when {
+        loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        error != null -> Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp))
+        query.trim().length < 2 -> Text("Type at least 2 characters to search.", color = Color.Gray, modifier = Modifier.padding(12.dp))
+        results.isEmpty() -> Text("No results found.", color = Color.Gray, modifier = Modifier.padding(12.dp))
+        else -> LazyColumn(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(results) { item -> SearchResultCard(item, onOpenVideo) }
+        }
+    }
+}
+
+@Composable
+private fun SearchResultCard(item: MusicSearchItem, onOpenVideo: (String) -> Unit) {
     Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
         color = Color(0xFF171719)
     ) {
         Row(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(item.title, fontWeight = FontWeight.SemiBold)
+                if (item.subtitle.isNotBlank()) {
+                    Spacer(Modifier.height(3.dp))
+                    Text(item.subtitle, color = Color.Gray, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                }
+            }
+            if (item.videoId != null) {
+                Button(onClick = { onOpenVideo(item.videoId) }) { Text("Open") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeScreen(isPlaying: Boolean, onPlayPause: () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxWidth().height(210.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF18181B)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = null,
+                modifier = Modifier.height(52.dp),
+                tint = Color.White
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(if (isPlaying) "Yuki Music Demo" else "Nothing playing", fontWeight = FontWeight.SemiBold)
+            Text(if (isPlaying) "Background player active" else "Tap play to test background playback", color = Color.Gray)
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = onPlayPause) { Text(if (isPlaying) "Pause" else "Play demo") }
+        }
+    }
+    Spacer(Modifier.height(20.dp))
+    Text("Quick access", style = MaterialTheme.typography.titleMedium)
+    Spacer(Modifier.height(10.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        QuickCard("Favorites", Icons.Default.FavoriteBorder, Modifier.weight(1f))
+        QuickCard("Library", Icons.Default.LibraryMusic, Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun QuickCard(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier) {
+    Surface(modifier = modifier, shape = RoundedCornerShape(18.dp), color = Color(0xFF171719)) {
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, contentDescription = null)
             Spacer(Modifier.padding(4.dp))
             Text(title, fontWeight = FontWeight.Medium)
@@ -265,27 +342,14 @@ private fun QuickCard(
 
 @Composable
 private fun MiniPlayer(isPlaying: Boolean, onPlayPause: () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = Color(0xFF19191C)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+    Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), color = Color(0xFF19191C)) {
+        Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    if (isPlaying) "Yuki Music Demo" else "No track selected",
-                    fontWeight = FontWeight.SemiBold
-                )
+                Text(if (isPlaying) "Yuki Music Demo" else "No track selected", fontWeight = FontWeight.SemiBold)
                 Text("Yuki Music", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
             }
             IconButton(onClick = onPlayPause) {
-                Icon(
-                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play"
-                )
+                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (isPlaying) "Pause" else "Play")
             }
         }
     }
