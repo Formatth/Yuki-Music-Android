@@ -2,15 +2,14 @@ package com.formatth.yukimusic
 
 import android.Manifest
 import android.content.ComponentName
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -68,17 +67,9 @@ class MainActivity : ComponentActivity() {
     private var mediaController: MediaController? = null
     private var controllerFuture: com.google.common.util.concurrent.ListenableFuture<MediaController>? = null
     private var isPlaying by mutableStateOf(false)
-
-    private val demoMediaItem = MediaItem.Builder()
-        .setUri("https://storage.googleapis.com/exoplayer-test-media-0/play.mp3")
-        .setMediaId("yuki-demo")
-        .setMediaMetadata(
-            MediaMetadata.Builder()
-                .setTitle("Yuki Music Demo")
-                .setArtist("Yuki Music")
-                .build()
-        )
-        .build()
+    private var currentTitle by mutableStateOf<String?>(null)
+    private var playbackError by mutableStateOf<String?>(null)
+    private var loadingVideoId by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,8 +84,11 @@ class MainActivity : ComponentActivity() {
             YukiMusicTheme {
                 YukiMusicApp(
                     isPlaying = isPlaying,
-                    onPlayPause = ::toggleDemoPlayback,
-                    onOpenVideo = ::openYouTube
+                    currentTitle = currentTitle,
+                    playbackError = playbackError,
+                    loadingVideoId = loadingVideoId,
+                    onPlayTrack = ::playTrack,
+                    onPlayPause = ::togglePlayback
                 )
             }
         }
@@ -109,6 +103,7 @@ class MainActivity : ComponentActivity() {
                     try {
                         mediaController = future.get()
                         isPlaying = mediaController?.isPlaying == true
+                        currentTitle = mediaController?.mediaMetadata?.title?.toString()
                     } catch (_: Exception) {
                         mediaController = null
                     }
@@ -125,23 +120,53 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
-    private fun toggleDemoPlayback() {
+    private fun playTrack(item: MusicSearchItem) {
+        val videoId = item.videoId ?: return
+        if (loadingVideoId != null) return
+
+        playbackError = null
+        loadingVideoId = videoId
+
+        lifecycleScope.launchWhenStarted {
+            try {
+                val audioUrl = MusicApi.resolvePlaybackUrl(videoId)
+                val controller = mediaController ?: throw IllegalStateException("Player service is not ready")
+
+                val mediaItem = MediaItem.Builder()
+                    .setUri(audioUrl)
+                    .setMediaId(videoId)
+                    .setMediaMetadata(
+                        MediaMetadata.Builder()
+                            .setTitle(item.title)
+                            .setArtist(item.subtitle.ifBlank { "YouTube Music" })
+                            .setArtworkUri(item.thumbnail?.let { android.net.Uri.parse(it) })
+                            .build()
+                    )
+                    .build()
+
+                controller.setMediaItem(mediaItem)
+                controller.prepare()
+                controller.play()
+                currentTitle = item.title
+                isPlaying = true
+            } catch (e: Exception) {
+                playbackError = e.message ?: "Unable to start playback"
+                isPlaying = false
+            } finally {
+                loadingVideoId = null
+            }
+        }
+    }
+
+    private fun togglePlayback() {
         val controller = mediaController ?: return
         if (controller.isPlaying) {
             controller.pause()
             isPlaying = false
-            return
+        } else if (controller.currentMediaItem != null) {
+            controller.play()
+            isPlaying = true
         }
-        if (controller.currentMediaItem == null) {
-            controller.setMediaItem(demoMediaItem)
-            controller.prepare()
-        }
-        controller.play()
-        isPlaying = true
-    }
-
-    private fun openYouTube(videoId: String) {
-        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$videoId")))
     }
 }
 
@@ -160,8 +185,11 @@ private fun YukiMusicTheme(content: @Composable () -> Unit) {
 @Composable
 private fun YukiMusicApp(
     isPlaying: Boolean,
-    onPlayPause: () -> Unit,
-    onOpenVideo: (String) -> Unit
+    currentTitle: String?,
+    playbackError: String?,
+    loadingVideoId: String?,
+    onPlayTrack: (MusicSearchItem) -> Unit,
+    onPlayPause: () -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
@@ -228,13 +256,13 @@ private fun YukiMusicApp(
             Spacer(Modifier.height(18.dp))
 
             if (selectedTab == 1) {
-                SearchScreen(query, { query = it }, results, loading, error, onOpenVideo)
+                SearchScreen(query, { query = it }, results, loading, error, loadingVideoId, onPlayTrack)
             } else {
-                HomeScreen(isPlaying, onPlayPause)
+                HomeScreen(isPlaying, currentTitle, playbackError, onPlayPause)
             }
 
             Spacer(Modifier.weight(1f))
-            MiniPlayer(isPlaying, onPlayPause)
+            MiniPlayer(currentTitle, isPlaying, onPlayPause)
         }
     }
 }
@@ -246,7 +274,8 @@ private fun SearchScreen(
     results: List<MusicSearchItem>,
     loading: Boolean,
     error: String?,
-    onOpenVideo: (String) -> Unit
+    loadingVideoId: String?,
+    onPlayTrack: (MusicSearchItem) -> Unit
 ) {
     OutlinedTextField(
         value = query,
@@ -270,13 +299,17 @@ private fun SearchScreen(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(results) { item -> SearchResultCard(item, onOpenVideo) }
+            items(results) { item -> SearchResultCard(item, loadingVideoId, onPlayTrack) }
         }
     }
 }
 
 @Composable
-private fun SearchResultCard(item: MusicSearchItem, onOpenVideo: (String) -> Unit) {
+private fun SearchResultCard(
+    item: MusicSearchItem,
+    loadingVideoId: String?,
+    onPlayTrack: (MusicSearchItem) -> Unit
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -294,16 +327,31 @@ private fun SearchResultCard(item: MusicSearchItem, onOpenVideo: (String) -> Uni
                 }
             }
             if (item.videoId != null) {
-                Button(onClick = { onOpenVideo(item.videoId) }) { Text("Open") }
+                if (loadingVideoId == item.videoId) {
+                    CircularProgressIndicator(modifier = Modifier.padding(8.dp))
+                } else {
+                    IconButton(onClick = { onPlayTrack(item) }) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "Play ${item.title}")
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun HomeScreen(isPlaying: Boolean, onPlayPause: () -> Unit) {
+private fun HomeScreen(
+    isPlaying: Boolean,
+    currentTitle: String?,
+    playbackError: String?,
+    onPlayPause: () -> Unit
+) {
     Box(
-        modifier = Modifier.fillMaxWidth().height(210.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF18181B)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(210.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(Color(0xFF18181B)),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -314,10 +362,19 @@ private fun HomeScreen(isPlaying: Boolean, onPlayPause: () -> Unit) {
                 tint = Color.White
             )
             Spacer(Modifier.height(10.dp))
-            Text(if (isPlaying) "Yuki Music Demo" else "Nothing playing", fontWeight = FontWeight.SemiBold)
-            Text(if (isPlaying) "Background player active" else "Tap play to test background playback", color = Color.Gray)
-            Spacer(Modifier.height(10.dp))
-            Button(onClick = onPlayPause) { Text(if (isPlaying) "Pause" else "Play demo") }
+            Text(currentTitle ?: "Nothing playing", fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(
+                if (isPlaying) "Playing in background" else "Search a song to start playback",
+                color = Color.Gray
+            )
+            if (playbackError != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(playbackError, color = MaterialTheme.colorScheme.error, maxLines = 2)
+            }
+            if (currentTitle != null) {
+                Spacer(Modifier.height(10.dp))
+                Button(onClick = onPlayPause) { Text(if (isPlaying) "Pause" else "Resume") }
+            }
         }
     }
     Spacer(Modifier.height(20.dp))
@@ -341,15 +398,20 @@ private fun QuickCard(title: String, icon: androidx.compose.ui.graphics.vector.I
 }
 
 @Composable
-private fun MiniPlayer(isPlaying: Boolean, onPlayPause: () -> Unit) {
+private fun MiniPlayer(currentTitle: String?, isPlaying: Boolean, onPlayPause: () -> Unit) {
     Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), color = Color(0xFF19191C)) {
         Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(if (isPlaying) "Yuki Music Demo" else "No track selected", fontWeight = FontWeight.SemiBold)
-                Text("Yuki Music", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                Text(currentTitle ?: "No track selected", fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text("Yuki Music • background player", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
             }
-            IconButton(onClick = onPlayPause) {
-                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (isPlaying) "Pause" else "Play")
+            if (currentTitle != null) {
+                IconButton(onClick = onPlayPause) {
+                    Icon(
+                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play"
+                    )
+                }
             }
         }
     }
