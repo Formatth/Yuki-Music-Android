@@ -46,4 +46,4 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-# Triggered by ChatGPT to validate the first remote build.
+# Remote build trigger: Gradle configuration validated.
