@@ -2,6 +2,10 @@ package com.formatth.yukimusic
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.os.Bundle
 import android.webkit.CookieManager
@@ -12,17 +16,28 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
+import androidx.core.content.ContextCompat
+import com.formatth.yukimusic.player.PlaybackService
 
 /**
  * Android shell around the Yuki Music PWA.
  *
- * The web app remains the source of truth for the UI and YouTube IFrame
- * playback. Android owns the window/lifecycle while this WebView provides the
- * browser capabilities required by the PWA.
+ * The web app remains the source of truth for UI and YouTube IFrame playback.
+ * Android adds a foreground media service so the WebView process remains
+ * important while the user listens in the background, plus native media
+ * controls that forward to the WebView player.
  */
 class WebViewActivity : Activity() {
     private lateinit var webView: WebView
     private var mainFrameRetries = 0
+
+    private val playbackReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val command = intent.getStringExtra(PlaybackService.EXTRA_COMMAND) ?: return
+            val js = "window.__yukiAndroidControl && window.__yukiAndroidControl(${org.json.JSONObject.quote(command)})"
+            webView.post { webView.evaluateJavascript(js, null) }
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -49,8 +64,6 @@ class WebViewActivity : Activity() {
         settings.cacheMode = WebSettings.LOAD_DEFAULT
         settings.allowFileAccess = false
         settings.allowContentAccess = false
-        // Keep Android WebView's normal browser identity. YouTube's embedded
-        // player can behave differently when the UA is modified.
 
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
@@ -78,14 +91,10 @@ class WebViewActivity : Activity() {
                 errorResponse: android.webkit.WebResourceResponse
             ) {
                 super.onReceivedHttpError(view, request, errorResponse)
-                if (request.isForMainFrame && errorResponse.statusCode >= 400) {
-                    retryMainFrame()
-                }
+                if (request.isForMainFrame && errorResponse.statusCode >= 400) retryMainFrame()
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                // Never interfere with iframe/subresource navigation. YouTube
-                // uses several cross-origin hosts for the embedded player.
                 if (!request.isForMainFrame) return false
                 val host = request.url.host ?: return false
                 return host != "yuki-music-pwa.vercel.app" &&
@@ -97,6 +106,10 @@ class WebViewActivity : Activity() {
         }
 
         webView.addJavascriptInterface(AndroidBridge(this), "YukiAndroid")
+
+        val filter = IntentFilter(PlaybackService.ACTION_CONTROL)
+        ContextCompat.registerReceiver(this, playbackReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+
         webView.loadUrl(APP_URL)
     }
 
@@ -114,11 +127,12 @@ class WebViewActivity : Activity() {
 
     override fun onPause() {
         // Do not call WebView.onPause(): that would intentionally pause the
-        // web audio pipeline when the Activity is backgrounded.
+        // YouTube WebView audio pipeline when the Activity is backgrounded.
         super.onPause()
     }
 
     override fun onDestroy() {
+        try { unregisterReceiver(playbackReceiver) } catch (_: Exception) {}
         webView.stopLoading()
         webView.loadUrl("about:blank")
         webView.removeAllViews()
@@ -136,11 +150,19 @@ class WebViewActivity : Activity() {
                 Toast.makeText(activity, message, Toast.LENGTH_SHORT).show()
             }
         }
+
+        @android.webkit.JavascriptInterface
+        fun updatePlayback(title: String, artist: String, artwork: String, playing: Boolean) {
+            PlaybackService.update(activity.applicationContext, title, artist, artwork, playing)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun stopPlayback() {
+            PlaybackService.stop(activity.applicationContext)
+        }
     }
 
     companion object {
-        // The web router expects '#/home'. '#home' becomes the invalid route
-        // '#/ome' after the router strips its prefix, causing "Page not found".
         private const val APP_URL = "https://yuki-music-pwa.vercel.app/#/home"
         private const val MAX_MAIN_FRAME_RETRIES = 2
     }
