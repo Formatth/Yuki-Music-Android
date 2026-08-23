@@ -1,6 +1,8 @@
 package com.formatth.yukimusic.player
 
 import android.content.Intent
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -25,9 +27,9 @@ class NativePlaybackService : MediaSessionService() {
 
         player = ExoPlayer.Builder(this).build().apply {
             setAudioAttributes(
-                androidx.media3.common.AudioAttributes.Builder()
-                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
-                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                     .build(),
                 true
             )
@@ -53,30 +55,22 @@ class NativePlaybackService : MediaSessionService() {
             ACTION_PLAY_URL -> {
                 val url = intent.getStringExtra(EXTRA_URL).orEmpty()
                 if (url.isNotBlank()) {
-                    val title = intent.getStringExtra(EXTRA_TITLE).orEmpty()
-                    val artist = intent.getStringExtra(EXTRA_ARTIST).orEmpty()
-                    val artwork = intent.getStringExtra(EXTRA_ARTWORK).orEmpty()
-
-                    val metadata = MediaMetadata.Builder()
-                        .setTitle(title.ifBlank { "Yuki Music" })
-                        .setArtist(artist)
-                        .setAlbumTitle("Yuki Music")
-                        .apply {
-                            if (artwork.isNotBlank()) {
-                                setArtworkUri(android.net.Uri.parse(artwork))
-                            }
-                        }
-                        .build()
-
-                    player.setMediaItem(
-                        MediaItem.Builder()
-                            .setUri(url)
-                            .setMediaMetadata(metadata)
-                            .build()
+                    playUrl(
+                        url = url,
+                        title = intent.getStringExtra(EXTRA_TITLE).orEmpty(),
+                        artist = intent.getStringExtra(EXTRA_ARTIST).orEmpty(),
+                        artwork = intent.getStringExtra(EXTRA_ARTWORK).orEmpty()
                     )
-                    player.prepare()
-                    player.play()
                 }
+            }
+
+            ACTION_PLAY_TEST -> {
+                playUrl(
+                    url = TEST_AUDIO_URL,
+                    title = "Yuki Native Playback Test",
+                    artist = "Media3",
+                    artwork = ""
+                )
             }
 
             ACTION_PAUSE -> player.pause()
@@ -92,6 +86,33 @@ class NativePlaybackService : MediaSessionService() {
         return START_STICKY
     }
 
+    private fun playUrl(
+        url: String,
+        title: String,
+        artist: String,
+        artwork: String
+    ) {
+        val metadata = MediaMetadata.Builder()
+            .setTitle(title.ifBlank { "Yuki Music" })
+            .setArtist(artist)
+            .setAlbumTitle("Yuki Music")
+            .apply {
+                if (artwork.isNotBlank()) {
+                    setArtworkUri(android.net.Uri.parse(artwork))
+                }
+            }
+            .build()
+
+        player.setMediaItem(
+            MediaItem.Builder()
+                .setUri(url)
+                .setMediaMetadata(metadata)
+                .build()
+        )
+        player.prepare()
+        player.play()
+    }
+
     override fun onDestroy() {
         mediaSession.release()
         player.release()
@@ -100,6 +121,7 @@ class NativePlaybackService : MediaSessionService() {
 
     companion object {
         const val ACTION_PLAY_URL = "com.formatth.yukimusic.native.PLAY_URL"
+        const val ACTION_PLAY_TEST = "com.formatth.yukimusic.native.PLAY_TEST"
         const val ACTION_PLAY = "com.formatth.yukimusic.native.PLAY"
         const val ACTION_PAUSE = "com.formatth.yukimusic.native.PAUSE"
         const val ACTION_NEXT = "com.formatth.yukimusic.native.NEXT"
@@ -110,5 +132,10 @@ class NativePlaybackService : MediaSessionService() {
         const val EXTRA_TITLE = "title"
         const val EXTRA_ARTIST = "artist"
         const val EXTRA_ARTWORK = "artwork"
+
+        // Temporary public sample used only to verify Media3 background playback.
+        // Replace/remove this after the native playback path is proven.
+        private const val TEST_AUDIO_URL =
+            "https://storage.googleapis.com/exoplayer-test-media-0/play.mp3"
     }
 }
